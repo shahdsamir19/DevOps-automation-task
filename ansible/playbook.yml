@@ -1,0 +1,106 @@
+---
+- hosts: all
+  become: yes
+  vars:
+    install_jenkins: false  # Default to false, overridden by extra-vars
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+      register: apt_update
+      retries: 3
+      delay: 5
+      until: apt_update is success
+
+    - name: Install Docker prerequisites
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+        update_cache: yes
+      register: apt_install
+      retries: 3
+      delay: 5
+      until: apt_install is success
+
+    - name: Add Docker GPG apt key
+      apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        state: present
+      register: apt_key
+      retries: 3
+      delay: 5
+      until: apt_key is success
+
+    - name: Add Docker repository
+      apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu focal stable"
+        state: present
+        update_cache: yes
+      register: apt_repo
+      retries: 3
+      delay: 5
+      until: apt_repo is success
+
+    - name: Install Docker
+      apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+        update_cache: yes
+      register: docker_install
+      retries: 3
+      delay: 5
+      until: docker_install is success
+
+    - name: Ensure Docker is started and enabled
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Add seed user to docker group
+      user:
+        name: seed
+        groups: docker
+        append: yes
+      when: ansible_user_id != 'root'
+
+    - name: Create and set permissions for jenkins_home directory
+      file:
+        path: /var/jenkins_home
+        state: directory
+        owner: 1000
+        group: 1000
+        mode: '0755'
+      when: install_jenkins
+
+    - name: Install pip for Docker module (if needed)
+      apt:
+        name: python3-pip
+        state: present
+      when: install_jenkins
+
+    - name: Install Docker Python library
+      pip:
+        name: docker
+        state: present
+      when: install_jenkins
+
+    - name: Stop and remove existing Jenkins container
+      shell: |
+        docker stop jenkins || true
+        docker rm jenkins || true
+      when: install_jenkins
+
+    - name: Run Jenkins container
+      shell: |
+        docker run -d --name jenkins -p 8080:8080 -p 50000:50000 -v /var/jenkins_home:/var/jenkins_home --restart always jenkins/jenkins:lts
+      when: install_jenkins
