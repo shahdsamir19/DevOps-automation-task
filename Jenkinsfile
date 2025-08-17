@@ -1,45 +1,41 @@
 pipeline {
     agent any
     environment {
-        // Replace with your GCP project ID
-        REGISTRY = 'gcr.io/your-project-id'
+        REGISTRY = "${env.CICD_PUBLIC_IP}:5000"  // Private registry on cicd machine
         IMAGE_NAME = 'my-flask-app'
-        IMAGE_TAG = "${env.BUILD_NUMBER}"
-        PROD_IP = credentials('production-public-ip') // Store production public IP in Jenkins credentials
+        IMAGE_TAG = "v${env.BUILD_NUMBER}"
+        PRODUCTION_IP = credentials('production-public-ip')  // Jenkins credential for production IP
+        SSH_CRED_ID = 'production-ssh-key'  // Jenkins credential for SSH key
     }
     stages {
-        stage('Build') {
+        stage('Build Docker Image') {
             steps {
                 script {
-                    // Build the Docker image
-                    docker.build("${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}")
+                    dir('/var/jenkins_home/app') {
+                        docker.build("${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}")
+                    }
                 }
             }
         }
-        stage('Push') {
+        stage('Push to Private Registry') {
             steps {
                 script {
-                    // Authenticate with GCR using service account key
-                    withCredentials([file(credentialsId: 'docker-credentials', variable: 'GCR_KEY')]) {
-                        sh 'cat $GCR_KEY | docker login -u _json_key --password-stdin https://gcr.io'
-                        // Push the image to GCR
+                    docker.withRegistry("http://${REGISTRY}") {
                         docker.image("${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}").push()
                     }
                 }
             }
         }
-        stage('Deploy') {
+        stage('Deploy to Production') {
             steps {
                 script {
-                    // Use SSH to deploy to production machine
-                    sshagent(credentials: ['ssh-credentials']) {
+                    withCredentials([sshUserPrivateKey(credentialsId: "${SSH_CRED_ID}", keyFileVariable: 'SSH_KEY', usernameVariable: 'SSH_USER')]) {
                         sh """
-                            ssh -o StrictHostKeyChecking=no seed@${PROD_IP} '
-                                docker stop my-flask-app || true &&
-                                docker rm my-flask-app || true &&
-                                docker pull ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} &&
-                                docker run -d --name my-flask-app -p 5000:5000 ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
-                            '
+                            ssh -i \${SSH_KEY} -o StrictHostKeyChecking=no \${SSH_USER}@\${PRODUCTION_IP} \\
+                            'docker pull ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} && \\
+                             docker stop my-flask-app || true && \\
+                             docker rm my-flask-app || true && \\
+                             docker run -d --name my-flask-app -p 5000:5000 ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}'
                         """
                     }
                 }
@@ -48,8 +44,10 @@ pipeline {
     }
     post {
         always {
-            // Clean up Docker images locally
-            sh "docker rmi ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} || true"
+            script {
+                // Clean up local Docker images
+                sh "docker rmi ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} || true"
+            }
         }
     }
 }
