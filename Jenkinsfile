@@ -1,19 +1,23 @@
 pipeline {
     agent any
     environment {
-        REGISTRY = "${env.CICD_PUBLIC_IP}:5000"  // Private registry on cicd machine
+        CICD_PUBLIC_IP = credentials('cicd-public-ip')  // Jenkins credential for cicd IP
+        REGISTRY = "${CICD_PUBLIC_IP}:5000"  // Private registry on cicd machine
         IMAGE_NAME = 'my-flask-app'
         IMAGE_TAG = "v${env.BUILD_NUMBER}"
         PRODUCTION_IP = credentials('production-public-ip')  // Jenkins credential for production IP
         SSH_CRED_ID = 'production-ssh-key'  // Jenkins credential for SSH key
     }
     stages {
+        stage('Checkout') {
+            steps {
+                git url: 'https://github.com/shahdsamir19/DevOps-automation-task', branch: 'main'
+            }
+        }
         stage('Build Docker Image') {
             steps {
                 script {
-                    dir('/var/jenkins_home/app') {
-                        docker.build("${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}")
-                    }
+                    docker.build("${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}", ".")
                 }
             }
         }
@@ -45,7 +49,6 @@ pipeline {
     post {
         always {
             script {
-                // Clean up local Docker images
                 sh "docker rmi ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} || true"
             }
         }
